@@ -11,9 +11,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"syscall"
-	"time"
-	"unsafe"
 
 	"github.com/0xrawsec/golang-utils/log"
 )
@@ -52,9 +49,9 @@ type Cmd struct {
 	stderrW *os.File // File that acts as a writer for WSL to write stderr into
 
 	// Book-keeping
-	handle     syscall.Handle // The windows handle to the WSL process
-	finished   bool           // Flag to fail nicely when Wait is invoked twice
-	exitStatus *uint32        // Exit status of the process. Cached because it cannot be read after the preocess is closed.
+	handle     handle  // The windows handle to the WSL process
+	finished   bool    // Flag to fail nicely when Wait is invoked twice
+	exitStatus *uint32 // Exit status of the process. Cached because it cannot be read after the preocess is closed.
 
 	// Context management
 	ctx      context.Context // Context to kill the process before it finishes
@@ -127,21 +124,6 @@ func (c *Cmd) Start() (err error) {
 		return errors.New("distro is not registered")
 	}
 
-	distroUTF16, err := syscall.UTF16PtrFromString(c.distro.Name)
-	if err != nil {
-		return errors.New("failed to convert distro name to UTF16")
-	}
-
-	commandUTF16, err := syscall.UTF16PtrFromString(c.command)
-	if err != nil {
-		return fmt.Errorf("failed to convert command %q to UTF16", c.command)
-	}
-
-	var useCwd wBOOL
-	if c.UseCWD {
-		useCwd = 1
-	}
-
 	if c.handle != 0 {
 		return errors.New("already started")
 	}
@@ -166,24 +148,11 @@ func (c *Cmd) Start() (err error) {
 		}
 	}
 
-	r1, _, _ := wslLaunch.Call(
-		uintptr(unsafe.Pointer(distroUTF16)),
-		uintptr(unsafe.Pointer(commandUTF16)),
-		uintptr(useCwd),
-		c.stdinR.Fd(),
-		c.stdoutW.Fd(),
-		c.stderrW.Fd(),
-		uintptr(unsafe.Pointer(&c.handle)))
-
-	if r1 != 0 {
+	err = wslLaunch(c.distro.Name, c.command, c.UseCWD, c.stdinR, c.stdoutW, c.stderrW, &c.handle)
+	if err != nil {
 		c.closeDescriptors(c.closeAfterStart)
 		c.closeDescriptors(c.closeAfterWait)
-		return fmt.Errorf("failed syscall to WslLaunch")
-	}
-	if c.handle == syscall.Handle(0) {
-		c.closeDescriptors(c.closeAfterStart)
-		c.closeDescriptors(c.closeAfterWait)
-		return fmt.Errorf("syscall to WslLaunch returned a null handle")
+		return fmt.Errorf("error starting command: %v", err)
 	}
 
 	c.closeDescriptors(c.closeAfterStart)
@@ -542,31 +511,6 @@ func (c *Cmd) Wait() error {
 	return copyError
 }
 
-func (c *Cmd) waitProcess() (uint32, error) {
-	event, statusError := syscall.WaitForSingleObject(c.handle, syscall.INFINITE)
-	if statusError != nil {
-		return WindowsError, fmt.Errorf("failed syscall to WaitForSingleObject: %v", statusError)
-	}
-	if event != syscall.WAIT_OBJECT_0 {
-		return WindowsError, fmt.Errorf("failed syscall to WaitForSingleObject, non-zero exit status %d", event)
-	}
-
-	// NOTE(brainman): It seems that sometimes process is not dead
-	// when WaitForSingleObject returns. But we do not know any
-	// other way to wait for it. Sleeping for a while seems to do
-	// the trick sometimes.
-	// See https://golang.org/issue/25965 for details.
-	time.Sleep(5 * time.Millisecond)
-
-	status, statusError := c.status()
-	ok := statusError == nil && status == 0
-
-	if err := syscall.CloseHandle(c.handle); !ok && err != nil {
-		return WindowsError, err
-	}
-	return status, statusError
-}
-
 // Run starts the specified WslProcess and waits for it to complete.
 //
 // The returned error is nil if the command runs and exits with a zero exit status.
@@ -579,31 +523,6 @@ func (c *Cmd) Run() error {
 		return err
 	}
 	return c.Wait()
-}
-
-// status querries Windows for the process' status.
-func (c *Cmd) status() (exit uint32, err error) {
-	// Retrieving from cache in case the process has been closed
-	if c.exitStatus != nil {
-		return *c.exitStatus, nil
-	}
-
-	err = syscall.GetExitCodeProcess(c.handle, &exit)
-	if err != nil {
-		return WindowsError, fmt.Errorf("failed to retrieve exit status: %v", err)
-	}
-	return exit, nil
-}
-
-// kill gets the exit status before closing the process, without checking
-// if it has finished or not.
-func (c *Cmd) kill() error {
-	status, err := c.status()
-	c.exitStatus = nil
-	if err == nil {
-		c.exitStatus = &status
-	}
-	return syscall.TerminateProcess(c.handle, ActiveProcess)
 }
 
 // prefixSuffixSaver is an io.Writer which retains the first N bytes
