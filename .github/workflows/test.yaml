@@ -52,6 +52,8 @@ jobs:
     needs: basic-verification
     # This step also has an implicit dependency on vm-setup, because the runner
     # won't be started until then.
+    env:
+      rootfsDir: "${HOME}\\Downloads\\rootfs"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -59,7 +61,11 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: "1.18"
-      - name: Launch async rootfs download
+      - name: Download rootfs
+        shell: powershell
+        run: |
+          .\.github\workflows\syncRootfs.ps1 -Path ${{ env.rootfsDir }}
+      - name: Copy rootfs
         shell: powershell
         run: |
           if( $(Test-Path -Path ".\images") ) {
@@ -67,14 +73,7 @@ jobs:
           }
           New-Item -ItemType "directory" -Path ".\images" -Force
           New-Item -ItemType "File" -Path ".\images\empty.tar.gz" -Force
-
-          Start-Process powershell.exe @'
-          Invoke-WebRequest                                                                                     `
-              -Uri "https://cloud-images.ubuntu.com/wsl/jammy/current/ubuntu-jammy-wsl-amd64-wsl.rootfs.tar.gz" `
-              -OutFile ".\images\jammy.tar.gz"                                                                  `
-              *> ".\images\download.log"
-          Write-Output "$?" > .\images\done.txt
-          '@
+          Copy-Item -Path "${{ env.rootfsDir }}\jammy.tar.gz" -Destination ".\images\jammy.tar.gz"
       - name: Install WSL
         uses: ubuntu/WSL/.github/actions/wsl-install/@fix-paths-wsl-exec
       - name: Set up Go
