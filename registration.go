@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
-	"unsafe"
 )
 
 // Register is a wrapper around Win32's WslRegisterDistribution.
@@ -35,25 +33,7 @@ func (d *Distro) Register(rootFsPath string) (e error) {
 		return errors.New("already registered")
 	}
 
-	distroUTF16, err := syscall.UTF16PtrFromString(d.Name)
-	if err != nil {
-		return errors.New("failed to convert distro name to UTF16")
-	}
-
-	rootFsPathUTF16, err := syscall.UTF16PtrFromString(rootFsPath)
-	if err != nil {
-		return fmt.Errorf("failed to convert rootfs '%q' to UTF16", rootFsPath)
-	}
-
-	r1, _, _ := wslRegisterDistribution.Call(
-		uintptr(unsafe.Pointer(distroUTF16)),
-		uintptr(unsafe.Pointer(rootFsPathUTF16)))
-
-	if r1 != 0 {
-		return fmt.Errorf("failed syscall to wslRegisterDistribution")
-	}
-
-	return nil
+	return wslRegisterDistribution(d.Name, rootFsPath)
 }
 
 // RegisteredDistros returns a slice of the registered distros.
@@ -63,24 +43,11 @@ func RegisteredDistros() ([]Distro, error) {
 
 // IsRegistered returns a boolean indicating whether a distro is registered or not.
 func (d Distro) IsRegistered() (registered bool, e error) {
-	defer func() {
-		if e != nil {
-			e = fmt.Errorf("failed to detect if %q is registered: %v", d.Name, e)
-		}
-	}()
-
-	distros, err := RegisteredDistros()
+	b, err := wslIsDistributionRegistered(d.Name)
 	if err != nil {
-		return false, err
+		return b, fmt.Errorf("failed to detect if %q is registered: %v", d.Name, err)
 	}
-
-	for _, dist := range distros {
-		if dist.Name != d.Name {
-			continue
-		}
-		return true, nil
-	}
-	return false, nil
+	return b, nil
 }
 
 // Unregister is a wrapper around Win32's WslUnregisterDistribution.
@@ -100,17 +67,7 @@ func (d *Distro) Unregister() (e error) {
 		return errors.New("not registered")
 	}
 
-	distroUTF16, err := syscall.UTF16PtrFromString(d.Name)
-	if err != nil {
-		return errors.New("failed to convert distro name to UTF16")
-	}
-
-	r1, _, _ := wslUnregisterDistribution.Call(uintptr(unsafe.Pointer(distroUTF16)))
-
-	if r1 != 0 {
-		return fmt.Errorf("failed syscall to WslLaunchInteractive")
-	}
-	return nil
+	return wslUnregisterDistribution(d.Name)
 }
 
 // fixPath deals with the fact that WslRegisterDistribuion is

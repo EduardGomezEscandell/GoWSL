@@ -3,8 +3,6 @@ package wsl
 import (
 	"errors"
 	"fmt"
-	"syscall"
-	"unsafe"
 )
 
 type shellOptions struct {
@@ -62,35 +60,10 @@ func (d *Distro) Shell(opts ...func(*shellOptions)) (err error) {
 		o(&options)
 	}
 
-	distroUTF16, err := syscall.UTF16PtrFromString(d.Name)
-	if err != nil {
-		return errors.New("failed to convert distro name to UTF16")
-	}
-
-	commandUTF16, err := syscall.UTF16PtrFromString(options.command)
-	if err != nil {
-		return fmt.Errorf("failed to convert command %q to UTF16", options.command)
-	}
-
-	var useCwd wBOOL
-	if options.useCWD {
-		useCwd = 1
-	}
-
 	var exitCode uint32
-
-	r1, _, _ := wslLaunchInteractive.Call(
-		uintptr(unsafe.Pointer(distroUTF16)),
-		uintptr(unsafe.Pointer(commandUTF16)),
-		uintptr(useCwd),
-		uintptr(unsafe.Pointer(&exitCode)))
-
-	if r1 != 0 {
-		return fmt.Errorf("failed syscall to WslLaunchInteractive")
-	}
-
-	if exitCode == WindowsError {
-		return fmt.Errorf("error on windows' side on WslLaunchInteractive")
+	err = wslLaunchInteractive(d.Name, options.command, options.useCWD, &exitCode)
+	if err != nil {
+		return err
 	}
 
 	if exitCode != 0 {
